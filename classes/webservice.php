@@ -43,6 +43,8 @@ if (!class_exists('Firebase\JWT\JWT')) {
 }
 
 define('API_URL', 'https://api.zoom.us/v2/');
+// TODO: what should this value be?
+define('MAX_RETRIES', 20);
 
 /**
  * Web service class.
@@ -84,6 +86,12 @@ class mod_zoom_webservice {
     protected static $userslist;
 
     /**
+     * Number of retries we've made for _make_call
+     * @var int
+     */
+    protected $makecallretries;
+
+    /**
      * The constructor for the webservice class.
      * @throws moodle_exception Moodle exception is thrown for missing config settings.
      */
@@ -109,6 +117,7 @@ class mod_zoom_webservice {
                 throw new moodle_exception('errorwebservice', 'mod_zoom', '', get_string('zoomerr_licensesnumber_missing', 'zoom'));
             }
         }
+        $makecallretries = 0;
     }
 
     /**
@@ -121,6 +130,9 @@ class mod_zoom_webservice {
      * @throws moodle_exception Moodle exception is thrown for curl errors.
      */
     protected function _make_call($url, $data = array(), $method = 'get') {
+        if ($makecallretries > MAX_RETRIES) {
+            throw new moodle_exception('errorwebservice', 'mod_zoom', '', get_string('zoomerr_maxretries', 'mod_zoom'));
+        }
         global $CFG;
         $url = API_URL . $url;
         $method = strtolower($method);
@@ -174,6 +186,16 @@ class mod_zoom_webservice {
             switch($httpstatus) {
                 case 404:
                     throw new zoom_not_found_exception($response->message);
+                case 429:
+                    $makecallretries += 1;
+                    // TODO: should we be updating this at all? wouldn't we want the code to just pick up from where it left off?
+                    // set_config('last_call_made_at', 0, 'mod_zoom');
+                    // TODO: do some var dumps to find this header
+                    $timediff = strtotime($curl->get_info()['Retry-After']) - time();
+                    if ($timediff <= 60) {
+                        sleep($timediff);
+                    }
+                    return _make_call($url, $data, $method);
                 default:
                     if ($response) {
                         throw new moodle_exception('errorwebservice', 'mod_zoom', '', $response->message);
